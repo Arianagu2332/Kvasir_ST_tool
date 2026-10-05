@@ -309,7 +309,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="kvasir-shell" :class="`theme-${settings.theme}`">
+  <div class="kvasir-shell" :class="{ 'theme-paper': settings.theme === 'paper', 'theme-night': settings.theme === 'night', 'theme-mint': settings.theme === 'mint', 'theme-berry': settings.theme === 'berry', 'theme-blueberry': settings.theme === 'blueberry' }">
     <div class="kvasir-panel">
       <header class="topbar">
         <div>
