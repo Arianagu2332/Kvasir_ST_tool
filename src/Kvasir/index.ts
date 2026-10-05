@@ -1,10 +1,11 @@
 import { createApp } from 'vue';
-import { createScriptIdIframe } from '@util/script';
+import { createScriptIdIframe, teleportStyle } from '@util/script';
 import App from './App.vue';
 import { clearKvasirInjections } from './injection';
 
 let iframe: JQuery<HTMLIFrameElement> | undefined;
 let app: ReturnType<typeof createApp> | undefined;
+let destroyTeleportedStyle: (() => void) | undefined;
 
 function mount() {
   iframe = createScriptIdIframe().css({
@@ -20,6 +21,8 @@ function mount() {
 
   iframe.on('load', () => {
     if (!iframe?.[0].contentDocument) return;
+    destroyTeleportedStyle?.();
+    destroyTeleportedStyle = teleportStyle(iframe[0].contentDocument.head).destroy;
     app = createApp(App, {
       onClose: () => {
         if (iframe) iframe.css({ display: 'none', pointerEvents: 'none' });
@@ -38,6 +41,7 @@ $(() => mount());
 
 $(window).on('pagehide', () => {
   app?.unmount();
+  destroyTeleportedStyle?.();
   iframe?.remove();
   clearKvasirInjections();
 });
