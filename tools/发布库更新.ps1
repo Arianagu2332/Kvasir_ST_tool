@@ -8,7 +8,7 @@ try {
   $libraryText = Get-Content -Raw -Encoding UTF8 -LiteralPath $libraryPath
   $library = $libraryText | ConvertFrom-Json
 } catch {
-  throw "无法解析 library/library.json。请确认文件内容从 { 开始、以 } 结束，不要包含 ```json、报错文字或反斜杠转义的引号。原始错误：$($_.Exception.Message)"
+  throw "无法解析 library/library.json。请确认文件内容从 { 开始、以 } 结束，不要包含 Markdown 代码框、报错文字或反斜杠转义的引号。原始错误：$($_.Exception.Message)"
 }
 if (-not $library.version) {
   throw 'library/library.json 缺少 version 字段。'
