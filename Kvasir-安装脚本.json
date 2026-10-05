@@ -1,0 +1,22 @@
+{
+  "type": "script",
+  "enabled": true,
+  "name": "Kvasir",
+  "id": "8b7a75cf-0fc4-4b93-9f3f-70e2aeea8f8b",
+  "content": "import 'https://testingcf.jsdelivr.net/gh/Arianagu2332/Kvasir_ST_tool@main/dist/Kvasir/index.js'",
+  "info": "Kvasir AU / IF / 番外故事工作台。脚本代码和官方故事库支持远程更新。",
+  "button": {
+    "enabled": true,
+    "buttons": [
+      {
+        "name": "Kvasir",
+        "visible": true
+      }
+    ]
+  },
+  "data": {},
+  "export_with": {
+    "data": true,
+    "button": true
+  }
+}
