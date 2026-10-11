@@ -27,7 +27,16 @@ $library | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $libraryPath -Enc
 @{ schemaVersion = 1; version = $version; updatedAt = $library.updatedAt; library = 'library.json' } |
   ConvertTo-Json | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
-git add library/library.json library/manifest.json
-git commit -m "chore: update Kvasir story library $version"
-git push
+git -c safe.directory="$projectRoot" add library/library.json library/manifest.json
+if ($LASTEXITCODE -ne 0) {
+  throw "Git add failed. Please check repository permissions."
+}
+git -c safe.directory="$projectRoot" commit -m "chore: update Kvasir story library $version"
+if ($LASTEXITCODE -ne 0) {
+  throw "Git commit failed. Please check repository permissions or Git identity."
+}
+git -c safe.directory="$projectRoot" push
+if ($LASTEXITCODE -ne 0) {
+  throw "Git push failed. The local files were kept, but the remote story library was not updated."
+}
 Write-Host "Kvasir story library published: $version" -ForegroundColor Green
