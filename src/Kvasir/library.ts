@@ -45,18 +45,24 @@ export function effectiveLibrary(settings: KvasirSettings): KvasirLibrary {
 }
 
 export async function refreshRemoteLibrary(settings: KvasirSettings): Promise<{ library: KvasirLibrary; changed: boolean }> {
-  const manifestResponse = await fetch(`${defaultManifestUrl}?t=${Date.now()}`, { cache: 'no-store' });
+  const cacheBust = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const manifestResponse = await fetch(`${defaultManifestUrl}?kvasir=${cacheBust}`, { cache: 'no-store' });
   if (!manifestResponse.ok) throw new Error(`远程库清单请求失败：${manifestResponse.status}`);
   const manifest = (await manifestResponse.json()) as { version?: string; library?: string };
   const version = String(manifest.version ?? 'unknown');
+  if (version === 'unknown') throw new Error('远程库清单缺少有效版本号');
   const libraryUrl = manifest.library?.startsWith('http')
     ? manifest.library
-    : `${defaultLibraryUrl}?v=${encodeURIComponent(version)}&t=${Date.now()}`;
-  const libraryResponse = await fetch(libraryUrl, { cache: 'no-store' });
+    : new URL(manifest.library || 'library.json', defaultManifestUrl).toString();
+  const libraryRequestUrl = `${libraryUrl}${libraryUrl.includes('?') ? '&' : '?'}kvasir=${encodeURIComponent(version)}-${cacheBust}`;
+  const libraryResponse = await fetch(libraryRequestUrl, { cache: 'no-store' });
   if (!libraryResponse.ok) throw new Error(`远程故事库请求失败：${libraryResponse.status}`);
   const library = parseLibrary(await libraryResponse.json());
-  const changed = settings.lastRemoteVersion !== version;
+  if (library.version !== version) {
+    throw new Error(`远程清单版本为 ${version}，但故事库内容为 ${library.version}，请重新发布 library.json 和 manifest.json`);
+  }
+  const changed = settings.lastRemoteVersion !== library.version;
   settings.remoteLibrary = library;
-  settings.lastRemoteVersion = version;
+  settings.lastRemoteVersion = library.version;
   return { library, changed };
 }

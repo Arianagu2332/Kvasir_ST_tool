@@ -103,7 +103,8 @@ async function refreshRemote(): Promise<void> {
     const result = await refreshRemoteLibrary(settings);
     updateSettings();
     refreshLibraryView();
-    toast(result.changed ? `故事库已更新至 ${result.library.version}` : '故事库已经是最新版本');
+    const counts = `${result.library.au.length} 个 AU、${result.library.if.length} 个 IF、${result.library.extra.length} 个番外`;
+    toast(result.changed ? `故事库已更新至 ${result.library.version}（${counts}）` : `故事库已经是最新版本（${counts}）`);
   } catch (error) {
     toast(`故事库更新失败：${error instanceof Error ? error.message : String(error)}`);
   }
