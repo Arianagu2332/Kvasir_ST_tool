@@ -3,7 +3,7 @@
   "enabled": true,
   "name": "Kvasir",
   "id": "8b7a75cf-0fc4-4b93-9f3f-70e2aeea8f8b",
-  "content": "import 'https://testingcf.jsdelivr.net/gh/Arianagu2332/Kvasir_ST_tool@main/dist/Kvasir/index.js'",
+  "content": "(async () => { const baseUrl = 'https://testingcf.jsdelivr.net/gh/Arianagu2332/Kvasir_ST_tool@main/dist/Kvasir/index.js'; const manifestUrl = 'https://raw.githubusercontent.com/Arianagu2332/Kvasir_ST_tool/main/library/manifest.json'; try { const response = await fetch(`${manifestUrl}?kvasir_loader=${Date.now()}`, { cache: 'no-store' }); const manifest = await response.json(); const version = encodeURIComponent(String(manifest.version || Date.now())); await import(`${baseUrl}?kvasir_version=${version}`); } catch (error) { console.error('[Kvasir] 远程版本读取失败，尝试直接加载脚本', error); await import(`${baseUrl}?kvasir_fallback=${Date.now()}`); } })();",
   "info": "Kvasir AU / IF / 番外故事工作台。脚本代码和官方故事库支持远程更新。",
   "button": {
     "enabled": true,

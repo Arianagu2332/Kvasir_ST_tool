@@ -4,7 +4,7 @@ Kvasir 是一个用于 SillyTavern 的酒馆助手脚本，提供 AU 世界观�
 
 ## 安装
 
-导入项目根目录的 `Kvasir-安装脚本.json`。脚本入口会从 GitHub jsDelivr 加载 `dist/Kvasir/index.js`。
+导入项目根目录的 `Kvasir-安装脚本.json`。安装脚本启动时会读取远程故事库版本，并使用带版本参数的动态导入加载 `dist/Kvasir/index.js`，避免浏览器或酒馆助手复用旧模块缓存。修改脚本后，重新启用脚本或刷新酒馆页面即可加载新版本。
 
 ## 故事库更新
 
