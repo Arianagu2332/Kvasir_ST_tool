@@ -35,8 +35,28 @@ git -c safe.directory="$projectRoot" commit -m "chore: update Kvasir story libra
 if ($LASTEXITCODE -ne 0) {
   throw "Git commit failed. Please check repository permissions or Git identity."
 }
-git -c safe.directory="$projectRoot" push
-if ($LASTEXITCODE -ne 0) {
-  throw "Git push failed. The local files were kept, but the remote story library was not updated."
+$pushSucceeded = $false
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+  git -c safe.directory="$projectRoot" push
+  if ($LASTEXITCODE -eq 0) {
+    $pushSucceeded = $true
+    break
+  }
+
+  if ($attempt -eq 3) { break }
+
+  Write-Host "Remote changed during publishing. Syncing and retrying ($attempt/3)..." -ForegroundColor Yellow
+  git -c safe.directory="$projectRoot" fetch origin
+  if ($LASTEXITCODE -ne 0) {
+    throw "Git fetch failed. The local story library commit was kept, but not published."
+  }
+  git -c safe.directory="$projectRoot" pull --rebase origin main
+  if ($LASTEXITCODE -ne 0) {
+    throw "Git rebase failed. The local story library commit was kept; resolve the Git conflict, then push again."
+  }
+}
+
+if (-not $pushSucceeded) {
+  throw "Git push failed after 3 attempts. The local story library commit was kept, but the remote story library was not updated."
 }
 Write-Host "Kvasir story library published: $version" -ForegroundColor Green
