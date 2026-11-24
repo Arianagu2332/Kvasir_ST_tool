@@ -4,8 +4,7 @@ import { emptyLibrary, ExtraGroup, KvasirLibrary, KvasirSettings } from './types
 export const officialExtraGroup = 'official';
 export const localExtraGroup = 'local';
 
-const defaultManifestUrl = 'https://raw.githubusercontent.com/Arianagu2332/Kvasir_ST_tool/main/library/manifest.json';
-const defaultLibraryUrl = 'https://raw.githubusercontent.com/Arianagu2332/Kvasir_ST_tool/main/library/library.json';
+const defaultManifestUrl = 'https://raw.githubusercontent.com/Arianagu2332/Kvasir_ST_tool/refs/heads/main/library/manifest.json';
 
 function parseLibrary(input: unknown): KvasirLibrary {
   const source = typeof input === 'string' ? JSON.parse(input) : input;
