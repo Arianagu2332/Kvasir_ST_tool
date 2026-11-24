@@ -33,6 +33,17 @@ export interface ExtraEntry {
 
 export type ExtraNsfw = '禁止' | '允许' | '必须';
 
+export interface ExtraWritingOptions {
+  minWords: number;
+  styles: string;
+  extra: string;
+}
+
+export interface ExtraWritingPreset extends ExtraWritingOptions {
+  id: string;
+  name: string;
+}
+
 export interface ExtraGroup {
   id: string;
   title: string;
@@ -63,7 +74,7 @@ export interface ActiveStory {
 }
 
 export interface KvasirSettings {
-  theme: 'paper' | 'night' | 'mint' | 'berry' | 'blueberry';
+  theme: 'paper' | 'night';
   injectionRole: 'system' | 'assistant' | 'user';
   injectionDepth: number;
   autoCheckLibrary: boolean;
@@ -74,6 +85,7 @@ export interface KvasirSettings {
   apiurl: string;
   apiKey: string;
   model: string;
+  extraWritingPresets: ExtraWritingPreset[];
   customLibrary: KvasirLibrary;
   remoteLibrary: KvasirLibrary | null;
 }

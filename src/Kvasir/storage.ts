@@ -12,6 +12,7 @@ const defaultSettings = (): KvasirSettings => ({
   apiurl: '',
   apiKey: '',
   model: '',
+  extraWritingPresets: [],
   customLibrary: emptyLibrary(),
   remoteLibrary: null,
 });
@@ -26,6 +27,8 @@ export function loadSettings(): KvasirSettings {
   return {
     ...defaults,
     ...raw,
+    theme: raw.theme === 'night' ? 'night' : 'paper',
+    extraWritingPresets: Array.isArray(raw.extraWritingPresets) ? raw.extraWritingPresets : defaults.extraWritingPresets,
     customLibrary: raw.customLibrary ?? defaults.customLibrary,
     remoteLibrary: raw.remoteLibrary ?? null,
   } as KvasirSettings;
