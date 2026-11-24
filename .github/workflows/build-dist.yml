@@ -32,11 +32,14 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - name: Commit dist
+      - name: Publish dist and script revision
         run: |
           if git diff --quiet -- dist; then exit 0; fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add dist
           git commit -m "chore: rebuild dist"
-          git push
+          printf '{\n  "revision": "%s"\n}\n' "$(git rev-parse HEAD)" > script-manifest.json
+          git add script-manifest.json
+          git commit -m "chore: publish Kvasir script revision"
+          git push origin HEAD:main

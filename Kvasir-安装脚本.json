@@ -3,7 +3,7 @@
   "enabled": true,
   "name": "Kvasir",
   "id": "8b7a75cf-0fc4-4b93-9f3f-70e2aeea8f8b",
-  "content": "(async () => { const baseUrl = 'https://testingcf.jsdelivr.net/gh/Arianagu2332/Kvasir_ST_tool@main/dist/Kvasir/index.js'; const manifestUrl = 'https://raw.githubusercontent.com/Arianagu2332/Kvasir_ST_tool/main/library/manifest.json'; try { const response = await fetch(`${manifestUrl}?kvasir_loader=${Date.now()}`, { cache: 'no-store' }); const manifest = await response.json(); const version = encodeURIComponent(String(manifest.version || Date.now())); await import(`${baseUrl}?kvasir_version=${version}`); } catch (error) { console.error('[Kvasir] 远程版本读取失败，尝试直接加载脚本', error); await import(`${baseUrl}?kvasir_fallback=${Date.now()}`); } })();",
+  "content": "(async () => {\n  const repository = 'Arianagu2332/Kvasir_ST_tool';\n  const manifestUrl = `https://raw.githubusercontent.com/${repository}/refs/heads/main/script-manifest.json`;\n  let revision = '1ae2e6f7ff62b1daa91229f092741b5fab62f0e1';\n  try {\n    const response = await fetch(`${manifestUrl}?kvasir=${Date.now()}`, { cache: 'no-store' });\n    if (!response.ok) throw new Error(`HTTP ${response.status}`);\n    const manifest = await response.json();\n    if (typeof manifest?.revision !== 'string' || !/^[0-9a-f]{40}$/.test(manifest.revision)) throw new Error('无效的脚本版本清单');\n    revision = manifest.revision;\n  } catch (error) {\n    console.warn('[Kvasir] 无法读取脚本版本清单，使用内置的已知版本', error);\n  }\n  await import(`https://cdn.jsdelivr.net/gh/${repository}@${revision}/dist/Kvasir/index.js`);\n})().catch(error => console.error('[Kvasir] 脚本加载失败', error));",
   "info": "Kvasir AU / IF / 番外故事工作台。脚本代码和官方故事库支持远程更新。",
   "button": {
     "enabled": true,
