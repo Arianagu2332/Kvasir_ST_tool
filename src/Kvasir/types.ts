@@ -26,10 +26,16 @@ export interface ExtraEntry {
   id: string;
   type: 'extra';
   title: string;
+  summary?: string;
   content: string;
-  defaultMinWords: number;
-  defaultNsfw: '禁止' | '允许' | '必须';
-  defaultStyles: string[];
+  groupId?: string;
+}
+
+export type ExtraNsfw = '禁止' | '允许' | '必须';
+
+export interface ExtraGroup {
+  id: string;
+  title: string;
 }
 
 export interface KvasirLibrary {
@@ -39,6 +45,7 @@ export interface KvasirLibrary {
   au: AUEntry[];
   if: IFEntry[];
   extra: ExtraEntry[];
+  extraGroups?: ExtraGroup[];
 }
 
 export interface ActiveStory {

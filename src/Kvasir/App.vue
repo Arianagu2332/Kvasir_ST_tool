@@ -1,38 +1,55 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { effectiveLibrary, refreshRemoteLibrary } from './library';
-import { clearKvasirInjections, refreshKvasirInjections } from './injection';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { effectiveLibrary, localExtraGroup, officialExtraGroup, officialLibrary, parseLocalLibrary, refreshRemoteLibrary } from './library';
+import { clearKvasirInjections, currentChatKey, refreshKvasirInjections } from './injection';
 import { loadActiveStory, loadSettings, saveActiveStory, saveSettings } from './storage';
 import { generateCharacterPack, renderExtraRequest, scanNpcWorldbookEntries, setChatInput } from './services';
-import { AUEntry, emptyLibrary, ExtraEntry, IFEntry, KvasirLibrary, KvasirSettings, ActiveStory, StoryKind } from './types';
+import { AUEntry, ExtraEntry, ExtraNsfw, IFEntry, KvasirLibrary, KvasirSettings, ActiveStory, StoryKind } from './types';
 
 const props = defineProps<{ onClose: () => void }>();
 type Tab = 'au' | 'if' | 'extra' | 'character' | 'injection' | 'settings';
-type EditorKind = 'au' | 'if' | 'extra';
+type EditorKind = 'au' | 'if' | 'extra' | 'group';
 
 const tab = ref<Tab>('au');
 const settings = reactive(loadSettings());
+settings.customLibrary = parseLocalLibrary(settings.customLibrary);
 const library = ref<KvasirLibrary>(effectiveLibrary(settings));
-const activeStory = ref<ActiveStory | null>(loadActiveStory());
+const officialExtras = ref(officialLibrary(settings).extra);
+let chatKey = currentChatKey();
+let storyRevision = 0;
+const activeStory = ref<ActiveStory | null>(chatKey ? loadActiveStory() : null);
 const selectedId = reactive<Record<StoryKind, string>>({ au: '', if: '' });
 const selectedExtraId = ref('');
+const extraGroupId = ref(officialExtraGroup);
+const extraList = ref<HTMLElement | null>(null);
 const presetNames = ref<string[]>([]);
 const proxyPresetNames = ref<string[]>([]);
 const notice = ref('');
-const generatedCharPack = ref('');
-const generatedNpcPack = ref('');
+const generatedCharPack = ref(activeStory.value?.characterPack ?? '');
+const generatedNpcPack = ref(activeStory.value?.npcPack ?? '');
 const generating = ref(false);
 const npcEntries = ref<Awaited<ReturnType<typeof scanNpcWorldbookEntries>>>([]);
 const selectedNpcKeys = ref<string[]>([]);
 const scanningNpc = ref(false);
-const editorOpen = ref(false);
+const editorDialog = ref<HTMLDialogElement | null>(null);
+const editorInitialFocus = ref<HTMLInputElement | null>(null);
+const keepEditingButton = ref<HTMLButtonElement | null>(null);
+const confirmDiscard = ref(false);
+const editorError = ref('');
 const editorKind = ref<EditorKind>('au');
 const editorDraft = ref<Record<string, any>>({});
-const extraOptions = reactive({ nsfw: '禁止' as ExtraEntry['defaultNsfw'], minWords: 8000, styles: '幽默搞笑', extra: '' });
+let editorInitial = '';
+let editorOpener: HTMLElement | null = null;
+const extraOptions = reactive({ nsfw: '禁止' as ExtraNsfw, minWords: 8000, styles: '幽默搞笑', extra: '' });
 
 const currentAu = computed(() => library.value.au.find(entry => entry.id === selectedId.au) ?? library.value.au[0]);
 const currentIf = computed(() => library.value.if.find(entry => entry.id === selectedId.if) ?? library.value.if[0]);
-const currentExtra = computed(() => library.value.extra.find(entry => entry.id === selectedExtraId.value) ?? library.value.extra[0]);
+const localGroups = computed(() => [{ id: localExtraGroup, title: '本地小剧场' }, ...(settings.customLibrary.extraGroups ?? [])]);
+const extraGroups = computed(() => [{ id: officialExtraGroup, title: '官方小剧场' }, ...localGroups.value]);
+const visibleExtras = computed(() => extraGroupId.value === officialExtraGroup
+  ? officialExtras.value
+  : settings.customLibrary.extra.filter(entry => entry.groupId === extraGroupId.value));
+const currentExtra = computed(() => visibleExtras.value.find(entry => entry.id === selectedExtraId.value) ?? visibleExtras.value[0]);
 const currentEntry = computed(() => tab.value === 'au' ? currentAu.value : currentIf.value);
 const localIds = computed(() => new Set([
   ...settings.customLibrary.au.map(entry => entry.id),
@@ -49,6 +66,8 @@ function toast(message: string): void {
 
 function refreshLibraryView(): void {
   library.value = effectiveLibrary(settings);
+  officialExtras.value = officialLibrary(settings).extra;
+  if (!extraGroups.value.some(group => group.id === extraGroupId.value)) extraGroupId.value = localExtraGroup;
 }
 
 function entryMainText(entry: AUEntry | IFEntry | undefined): string {
@@ -61,6 +80,12 @@ function updateSettings(): void {
 }
 
 function activate(kind: StoryKind, entry: AUEntry | IFEntry): void {
+  const current = currentChatKey();
+  if (!current) {
+    toast('请先打开一个聊天');
+    return;
+  }
+  if (current !== chatKey) syncChat();
   const active: ActiveStory = {
     kind,
     entryId: entry.id,
@@ -75,27 +100,41 @@ function activate(kind: StoryKind, entry: AUEntry | IFEntry): void {
     npcPackEnabled: false,
   };
   activeStory.value = active;
+  storyRevision++;
+  resetPackPreview();
   saveActiveStory(active);
-  refreshKvasirInjections(settings, active);
+  applyInjections();
   toast(`已启用${kind === 'au' ? 'AU' : 'IF'}：${entry.title}`);
 }
 
 function deactivate(): void {
+  if (!chatKey || currentChatKey() !== chatKey) return;
   activeStory.value = null;
+  storyRevision++;
+  resetPackPreview();
   saveActiveStory(null);
   clearKvasirInjections();
   toast('当前故事线和补充包已清除');
 }
 
 function refreshInjections(): void {
-  refreshKvasirInjections(settings, activeStory.value);
+  syncChat();
   toast('当前聊天注入已刷新');
 }
 
 function updateActive(): void {
-  if (!activeStory.value) return;
-  saveActiveStory(activeStory.value);
-  refreshKvasirInjections(settings, activeStory.value);
+  if (!activeStory.value || !chatKey || currentChatKey() !== chatKey) return;
+  saveActiveStory({ ...activeStory.value });
+  applyInjections();
+}
+
+function applyInjections(): void {
+  refreshKvasirInjections(settings, activeStory.value, chatKey);
+}
+
+function resetPackPreview(): void {
+  generatedCharPack.value = activeStory.value?.characterPack ?? '';
+  generatedNpcPack.value = activeStory.value?.npcPack ?? '';
 }
 
 async function refreshRemote(): Promise<void> {
@@ -124,9 +163,12 @@ function characterPresetNames(): void {
 }
 
 async function scanNpcs(): Promise<void> {
+  const originChat = chatKey;
   scanningNpc.value = true;
   try {
-    npcEntries.value = await scanNpcWorldbookEntries();
+    const entries = await scanNpcWorldbookEntries();
+    if (originChat !== chatKey || originChat !== currentChatKey()) return;
+    npcEntries.value = entries;
     toast(`扫描到 ${npcEntries.value.length} 个世界书条目，请手动勾选 NPC`);
   } catch (error) {
     toast(`世界书扫描失败：${error instanceof Error ? error.message : String(error)}`);
@@ -143,17 +185,13 @@ function selectedNpcEntries() {
   return npcEntries.value.filter(entry => selectedNpcKeys.value.includes(npcKey(entry.worldbook, entry.uid)));
 }
 
-function splitGeneratedPack(content: string): { character: string; npc: string } {
-  const marker = content.search(/【NPC补充包[：:]/);
-  if (marker < 0) return { character: content.trim(), npc: '' };
-  return { character: content.slice(0, marker).replace(/【\{\{char\}\}补充包】/, '').trim(), npc: content.slice(marker).trim() };
-}
-
 async function generatePack(): Promise<void> {
-  if (!activeStory.value) {
+  if (!activeStory.value || !chatKey || currentChatKey() !== chatKey) {
     toast('请先启用一个 AU 或 IF 故事线');
     return;
   }
+  const originRevision = storyRevision;
+  const originChat = chatKey;
   generating.value = true;
   try {
     const result = await generateCharacterPack(settings, {
@@ -163,9 +201,9 @@ async function generatePack(): Promise<void> {
       adaptationHints: activeStory.value.adaptationHints,
       selectedNpcEntries: selectedNpcEntries(),
     });
-    const split = splitGeneratedPack(result);
-    generatedCharPack.value = split.character;
-    generatedNpcPack.value = split.npc;
+    if (originRevision !== storyRevision || originChat !== currentChatKey()) return;
+    generatedCharPack.value = result.character;
+    generatedNpcPack.value = result.npc;
     toast('人设补充包已生成，请检查后注入');
   } catch (error) {
     toast(`生成人设失败：${error instanceof Error ? error.message : String(error)}`);
@@ -175,7 +213,7 @@ async function generatePack(): Promise<void> {
 }
 
 function injectGeneratedPack(): void {
-  if (!activeStory.value) return;
+  if (!activeStory.value || !chatKey || currentChatKey() !== chatKey) return;
   activeStory.value.characterPack = generatedCharPack.value.trim();
   activeStory.value.npcPack = generatedNpcPack.value.trim();
   activeStory.value.characterPackEnabled = Boolean(activeStory.value.characterPack);
@@ -185,6 +223,7 @@ function injectGeneratedPack(): void {
 }
 
 function clearGeneratedPack(): void {
+  storyRevision++;
   generatedCharPack.value = '';
   generatedNpcPack.value = '';
   if (!activeStory.value) return;
@@ -213,37 +252,88 @@ function generateExtraRequest(): void {
   }
 }
 
-function newEditor(kind: EditorKind): void {
-  editorKind.value = kind;
-  editorDraft.value = kind === 'au'
-    ? { id: `custom-au-${Date.now()}`, type: 'au', title: '', summary: '', world: '', adaptationHints: '', taboos: '', style: '' }
-    : kind === 'if'
-      ? { id: `custom-if-${Date.now()}`, type: 'if', title: '', summary: '', premise: '', adaptationHints: '', taboos: '', style: '' }
-      : { id: `custom-extra-${Date.now()}`, type: 'extra', title: '', content: '', defaultMinWords: 8000, defaultNsfw: '禁止', defaultStyles: ['幽默搞笑'] };
-  editorOpen.value = true;
+function newId(kind: EditorKind): string {
+  return `custom-${kind}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function editEntry(kind: EditorKind, entry: AUEntry | IFEntry | ExtraEntry): void {
+function openEditor(kind: EditorKind, draft: Record<string, any>): void {
+  const dialog = editorDialog.value;
+  if (!dialog || dialog.open) return;
+  editorOpener = dialog.ownerDocument.activeElement as HTMLElement | null;
   editorKind.value = kind;
-  editorDraft.value = JSON.parse(JSON.stringify(entry));
-  if (kind === 'extra') editorDraft.value.defaultStyles = [...(entry as ExtraEntry).defaultStyles];
-  editorOpen.value = true;
+  editorDraft.value = draft;
+  editorInitial = JSON.stringify(draft);
+  editorError.value = '';
+  confirmDiscard.value = false;
+  dialog.showModal();
+  dialog.scrollTop = 0;
+  void nextTick(() => editorInitialFocus.value?.focus());
+}
+
+function newEditor(kind: EditorKind): void {
+  const id = newId(kind);
+  const base = { id, type: kind, title: '', summary: '' };
+  if (kind === 'group') openEditor(kind, { id, title: '' });
+  else if (kind === 'extra') openEditor(kind, { ...base, content: '', groupId: extraGroupId.value === officialExtraGroup ? localExtraGroup : extraGroupId.value });
+  else openEditor(kind, { ...base, ...(kind === 'au' ? { world: '' } : { premise: '' }), adaptationHints: '', taboos: '', style: '' });
+}
+
+function editEntry(kind: Exclude<EditorKind, 'group'>, entry: AUEntry | IFEntry | ExtraEntry): void {
+  if (kind === 'extra' && entry.type === 'extra' && extraGroupId.value === officialExtraGroup) {
+    openEditor(kind, { id: newId(kind), type: kind, title: entry.title, summary: entry.summary ?? '', content: entry.content, groupId: localExtraGroup });
+    return;
+  }
+  openEditor(kind, { ...entry });
+}
+
+function closeEditor(): void {
+  editorDialog.value?.close();
+  editorOpener?.focus();
+  editorOpener = null;
+  confirmDiscard.value = false;
+}
+
+function requestEditorClose(): void {
+  if (JSON.stringify(editorDraft.value) === editorInitial) closeEditor();
+  else if (confirmDiscard.value) resumeEditing();
+  else {
+    confirmDiscard.value = true;
+    void nextTick(() => keepEditingButton.value?.focus());
+  }
+}
+
+function resumeEditing(): void {
+  confirmDiscard.value = false;
+  void nextTick(() => editorInitialFocus.value?.focus());
 }
 
 function saveEditor(): void {
-  const entry = JSON.parse(JSON.stringify(editorDraft.value));
+  const entry = { ...editorDraft.value, id: String(editorDraft.value.id), title: String(editorDraft.value.title ?? '').trim() };
+  const kind = editorKind.value;
   if (!entry.title) {
-    toast('条目名称不能为空');
+    editorError.value = kind === 'group' ? '分组名称不能为空' : '条目名称不能为空';
     return;
   }
-  const target = settings.customLibrary[editorKind.value === 'au' ? 'au' : editorKind.value === 'if' ? 'if' : 'extra'] as Array<any>;
+  if (kind === 'extra' && !String(editorDraft.value.content ?? '').trim()) {
+    editorError.value = '请填写小剧场内容';
+    return;
+  }
+  if (kind === 'group' && extraGroups.value.some(group => group.title === entry.title)) {
+    editorError.value = '已有同名分组';
+    return;
+  }
+  const target = (kind === 'group' ? settings.customLibrary.extraGroups ??= [] : settings.customLibrary[kind]) as Array<any>;
   const index = target.findIndex(item => item.id === entry.id);
   if (index >= 0) target.splice(index, 1, entry);
   else target.push(entry);
   updateSettings();
   refreshLibraryView();
-  editorOpen.value = false;
-  toast('本地条目已保存');
+  if (kind === 'group' || kind === 'extra') {
+    extraGroupId.value = kind === 'group' ? editorDraft.value.id : editorDraft.value.groupId;
+    selectedExtraId.value = kind === 'extra' ? editorDraft.value.id : '';
+  }
+  closeEditor();
+  toast(kind === 'group' ? '分组已创建' : '本地条目已保存');
 }
 
 function deleteLocalEntry(kind: EditorKind, id: string): void {
@@ -276,8 +366,7 @@ function importCustomLibrary(event: Event): void {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const imported = JSON.parse(String(reader.result)) as KvasirLibrary;
-      settings.customLibrary = { ...emptyLibrary(), ...imported };
+      settings.customLibrary = parseLocalLibrary(JSON.parse(String(reader.result)));
       updateSettings();
       refreshLibraryView();
       toast('本地故事库已导入');
@@ -289,23 +378,39 @@ function importCustomLibrary(event: Event): void {
   input.value = '';
 }
 
-function onChatChanged(): void {
-  clearKvasirInjections();
-  activeStory.value = null;
-  saveActiveStory(null);
+function syncChat(): void {
+  const next = currentChatKey();
+  const changed = next !== chatKey;
+  chatKey = next;
+  activeStory.value = next ? loadActiveStory() : null;
+  if (changed) {
+    storyRevision++;
+    resetPackPreview();
+    npcEntries.value = [];
+    selectedNpcKeys.value = [];
+  }
+  applyInjections();
 }
 
+watch(extraGroupId, () => { if (extraList.value) extraList.value.scrollTop = 0; }, { flush: 'post' });
 watch(() => settings.theme, updateSettings);
 watch(() => [settings.injectionRole, settings.injectionDepth], () => {
   updateSettings();
-  refreshInjections();
+  syncChat();
 });
 
+let stopChatSync: (() => void) | undefined;
+let stopGenerationSync: (() => void) | undefined;
 onMounted(() => {
   characterPresetNames();
   if (settings.autoCheckLibrary) void refreshRemote();
-  if (activeStory.value) refreshKvasirInjections(settings, activeStory.value);
-  eventOn(tavern_events.CHAT_CHANGED, onChatChanged);
+  stopChatSync = eventMakeLast(tavern_events.CHAT_CHANGED, syncChat).stop;
+  stopGenerationSync = eventMakeLast(tavern_events.GENERATION_AFTER_COMMANDS, syncChat).stop;
+  syncChat();
+});
+onUnmounted(() => {
+  stopChatSync?.();
+  stopGenerationSync?.();
 });
 </script>
 
@@ -331,7 +436,7 @@ onMounted(() => {
         <button :class="{ active: tab === 'settings' }" @click="tab = 'settings'">设置</button>
       </nav>
 
-      <main class="content">
+      <main class="content" :class="{ 'extra-content': tab === 'extra' }">
         <section v-if="tab === 'au' || tab === 'if'" class="library-view">
           <div class="section-heading">
             <div>
@@ -370,23 +475,31 @@ onMounted(() => {
           </div>
         </section>
 
-        <section v-else-if="tab === 'extra'" class="library-view">
-          <div class="section-heading"><div><h2>番外小剧场库</h2><p>选择一个番外模板，组合选项后置入输入框。</p></div><button class="primary" @click="newEditor('extra')">新增本地条目</button></div>
-          <div class="library-grid">
-            <div class="entry-list">
-              <button v-for="entry in library.extra" :key="entry.id" class="entry-card" :class="{ selected: selectedExtraId === entry.id }" @click="selectedExtraId = entry.id"><strong>{{ entry.title }}</strong><span>{{ entry.content }}</span><small>{{ localIds.has(entry.id) ? '本地' : '官方' }}</small></button>
-              <div v-if="!library.extra.length" class="empty">暂无番外条目，可先新增本地条目。</div>
+        <section v-else-if="tab === 'extra'" class="extra-view" aria-label="番外小剧场库">
+          <div class="extra-toolbar">
+            <select v-model="extraGroupId" aria-label="小剧场分组">
+              <option v-for="group in extraGroups" :key="group.id" :value="group.id">{{ group.title }}</option>
+            </select>
+            <button class="secondary" @click="newEditor('group')">新建分组</button>
+            <button class="primary" @click="newEditor('extra')">新增条目</button>
+          </div>
+          <div class="library-grid extra-grid">
+            <div ref="extraList" class="entry-list extra-list" tabindex="0" role="region" aria-label="当前分组的小剧场列表">
+              <button v-for="entry in visibleExtras" :key="entry.id" class="entry-card" :class="{ selected: currentExtra?.id === entry.id }" :aria-pressed="currentExtra?.id === entry.id" @click="selectedExtraId = entry.id"><strong>{{ entry.title }}</strong><span>{{ entry.summary || entry.content }}</span></button>
+              <div v-if="!visibleExtras.length" class="empty">此分组暂无小剧场。</div>
             </div>
-            <div v-if="currentExtra" class="detail-card">
-              <div class="detail-title"><div><span class="pill">EXTRA</span><h3>{{ currentExtra.title }}</h3></div><span class="source-label">{{ localIds.has(currentExtra.id) ? '本地条目' : '远程条目' }}</span></div>
-              <div class="text-block"><label>小剧场内容</label><pre>{{ currentExtra.content }}</pre></div>
-              <div class="option-grid">
-                <label>NSFW<select v-model="extraOptions.nsfw"><option>禁止</option><option>允许</option><option>必须</option></select></label>
-                <label>最低字数<input v-model.number="extraOptions.minWords" type="number" min="100" step="100" /></label>
+            <div v-if="currentExtra" class="detail-card extra-detail">
+              <div class="detail-title"><h3>{{ currentExtra.title }}</h3></div>
+              <div class="extra-detail-body">
+                <details :key="currentExtra.id" class="text-block"><summary>查看小剧场内容</summary><pre>{{ currentExtra.content }}</pre></details>
+                <div class="option-grid">
+                  <label>NSFW<select v-model="extraOptions.nsfw"><option>禁止</option><option>允许</option><option>必须</option></select></label>
+                  <label>最低字数<input v-model.number="extraOptions.minWords" type="number" min="100" step="100" /></label>
+                </div>
+                <label class="field">写作风格<input v-model="extraOptions.styles" placeholder="幽默搞笑, 黑色幽默" /></label>
+                <label class="field">本次额外要求<textarea v-model="extraOptions.extra" rows="2" placeholder="可留空"></textarea></label>
               </div>
-              <label class="field">写作风格<input v-model="extraOptions.styles" placeholder="幽默搞笑, 黑色幽默" /></label>
-              <label class="field">本次额外要求<textarea v-model="extraOptions.extra" rows="3" placeholder="可留空"></textarea></label>
-              <div class="button-row"><button class="primary" @click="generateExtraRequest">置入输入框</button><button class="secondary" @click="editEntry('extra', currentExtra)">复制到本地编辑</button><button v-if="localIds.has(currentExtra.id)" class="danger" @click="deleteLocalEntry('extra', currentExtra.id)">删除本地条目</button></div>
+              <div class="button-row"><button class="primary" @click="generateExtraRequest">置入输入框</button><button class="secondary" @click="editEntry('extra', currentExtra)">{{ extraGroupId === officialExtraGroup ? '复制到本地' : '编辑 / 移动' }}</button><button v-if="extraGroupId !== officialExtraGroup" class="danger" @click="deleteLocalEntry('extra', currentExtra.id)">删除</button></div>
             </div>
           </div>
         </section>
@@ -408,7 +521,7 @@ onMounted(() => {
         </section>
 
         <section v-else-if="tab === 'injection'" class="workflow-view">
-          <div class="section-heading"><div><h2>注入管理</h2><p>所有注入只属于当前聊天，切换聊天后会自动清空。</p></div><button class="primary" @click="refreshInjections">刷新注入</button></div>
+          <div class="section-heading"><div><h2>注入管理</h2><p>注入只在所属聊天生效；刷新或回到该聊天时恢复。</p></div><button class="primary" @click="refreshInjections">刷新注入</button></div>
           <div v-if="activeStory" class="active-box"><strong>{{ activeStory.title }}</strong><span>{{ activeStory.kind === 'au' ? 'AU世界观' : 'IF剧情前提' }}</span><p>世界观或 IF 前提：已注入</p><p>角色补充包：{{ activeStory.characterPackEnabled ? '已注入' : '未启用' }}</p><p>NPC 补充包：{{ activeStory.npcPackEnabled ? '已注入' : '未启用' }}</p><div class="button-row"><button class="secondary" @click="activeStory.characterPackEnabled = !activeStory.characterPackEnabled; updateActive()">切换角色包</button><button class="secondary" @click="activeStory.npcPackEnabled = !activeStory.npcPackEnabled; updateActive()">切换 NPC 包</button><button class="danger" @click="deactivate">清除当前故事线</button></div></div><div v-else class="empty large">当前聊天没有启用的故事线。</div>
         </section>
 
@@ -421,13 +534,42 @@ onMounted(() => {
         </section>
       </main>
 
-      <div v-if="editorOpen" class="modal-backdrop" @click.self="editorOpen = false"><div class="editor-modal"><div class="section-heading"><div><h2>编辑本地条目</h2><p>保存后立即可以在当前 Kvasir 中使用。</p></div><button class="icon-button" @click="editorOpen = false">×</button></div><label class="field">名称<input v-model="editorDraft.title" /></label><label class="field">简介<input v-model="editorDraft.summary" /></label><template v-if="editorKind === 'au'"><label class="field">世界观<textarea v-model="editorDraft.world" rows="8"></textarea></label><label class="field">适配提示<textarea v-model="editorDraft.adaptationHints" rows="4"></textarea></label></template><template v-else-if="editorKind === 'if'"><label class="field">IF前提<textarea v-model="editorDraft.premise" rows="8"></textarea></label><label class="field">适配提示<textarea v-model="editorDraft.adaptationHints" rows="4"></textarea></label></template><template v-else><label class="field">小剧场内容<textarea v-model="editorDraft.content" rows="8"></textarea></label><div class="settings-grid"><label>最低字数<input v-model.number="editorDraft.defaultMinWords" type="number" min="100" /></label><label>默认 NSFW<select v-model="editorDraft.defaultNsfw"><option>禁止</option><option>允许</option><option>必须</option></select></label></div></template><label class="field">禁忌<textarea v-model="editorDraft.taboos" rows="3"></textarea></label><label class="field">文风<input v-model="editorDraft.style" placeholder="可留空" /></label><div class="button-row"><button class="primary" @click="saveEditor">保存条目</button><button class="secondary" @click="editorOpen = false">取消</button></div></div></div>
+      <dialog ref="editorDialog" class="editor-modal" aria-labelledby="editor-title" @cancel.prevent="requestEditorClose">
+        <form @submit.prevent="saveEditor">
+          <div class="editor-heading">
+            <h2 id="editor-title">{{ editorKind === 'group' ? '新建本地分组' : '编辑本地条目' }}</h2>
+            <button type="button" class="icon-button" aria-label="关闭编辑器" @click="requestEditorClose">×</button>
+          </div>
+          <div :inert="confirmDiscard">
+            <label class="field">{{ editorKind === 'group' ? '分组名称' : '名称' }}<input ref="editorInitialFocus" v-model="editorDraft.title" /></label>
+            <label v-if="editorKind !== 'group'" class="field">简介<input v-model="editorDraft.summary" /></label>
+            <template v-if="editorKind === 'extra'">
+              <label class="field">小剧场内容<textarea v-model="editorDraft.content" rows="8"></textarea></label>
+              <label class="field">保存到分组<select v-model="editorDraft.groupId"><option v-for="group in localGroups" :key="group.id" :value="group.id">{{ group.title }}</option></select></label>
+            </template>
+            <template v-else-if="editorKind === 'au' || editorKind === 'if'">
+              <label v-if="editorKind === 'au'" class="field">世界观<textarea v-model="editorDraft.world" rows="8"></textarea></label>
+              <label v-else class="field">IF前提<textarea v-model="editorDraft.premise" rows="8"></textarea></label>
+              <label class="field">适配提示<textarea v-model="editorDraft.adaptationHints" rows="4"></textarea></label>
+              <label class="field">禁忌<textarea v-model="editorDraft.taboos" rows="3"></textarea></label>
+              <label class="field">文风<input v-model="editorDraft.style" placeholder="可留空" /></label>
+            </template>
+          </div>
+          <p v-if="editorError && !confirmDiscard" class="editor-error" role="alert">{{ editorError }}</p>
+          <div v-if="confirmDiscard" class="discard-warning">
+            <p role="alert">有未保存的修改，确定要丢弃吗？</p>
+            <div class="button-row"><button ref="keepEditingButton" type="button" class="primary" @click="resumeEditing">继续编辑</button><button type="button" class="danger" @click="closeEditor">丢弃修改</button></div>
+          </div>
+          <div v-else class="button-row"><button class="primary" type="submit">{{ editorKind === 'group' ? '创建分组' : '保存条目' }}</button><button type="button" class="secondary" @click="requestEditorClose">取消</button></div>
+        </form>
+      </dialog>
     </div>
   </div>
 </template>
 
 <style>
 :host { display: block; }
+html, body { margin: 0; }
 * { box-sizing: border-box; }
 button, input, textarea, select { font: inherit; }
 .kvasir-shell { --bg: #f5f5f2; --panel: #ffffff; --text: #202020; --muted: #727272; --line: #d7d7d2; --accent: #202020; --accent-text: #ffffff; --soft: #eeeeea; --danger: #a53535; min-height: 100vh; padding: 5vh 4vw; color: var(--text); background: rgba(20,20,20,.48); font-family: Inter, ui-sans-serif, system-ui, 'Microsoft YaHei', sans-serif; }
@@ -449,7 +591,22 @@ button, input, textarea, select { font: inherit; }
 .secondary { color: var(--text); background: var(--soft); }
 .danger { color: var(--danger); background: transparent; border-color: currentColor; }
 button:disabled { opacity: .5; cursor: not-allowed; }
-.content { flex: 1; overflow: auto; padding: 24px; background: var(--bg); }
+.content { flex: 1; min-height: 0; overflow: auto; padding: 24px; background: var(--bg); }
+.content.extra-content { overflow: hidden; }
+.extra-view { height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
+.extra-toolbar { display: flex; gap: 8px; min-width: 0; }
+.extra-toolbar select { flex: 1; min-width: 0; }
+.extra-toolbar button { flex-shrink: 0; white-space: nowrap; }
+.extra-grid { min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.extra-list { overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; min-height: 0; }
+.extra-list > * { flex-shrink: 0; }
+.extra-detail { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
+.extra-detail h3 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.extra-detail-body { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.extra-detail-body details { margin: 8px 0; }
+.extra-detail-body summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.extra-detail-body pre { max-height: min(160px, 24vh); }
+.extra-detail .button-row { margin-top: 8px; }
 .section-heading { justify-content: space-between; gap: 12px; margin-bottom: 20px; }
 .section-heading.compact { margin-bottom: 12px; }
 h2, h3, p { margin: 0; }
@@ -489,16 +646,27 @@ textarea { resize: vertical; line-height: 1.5; }
 .file-button input { display: none; }
 .empty { padding: 30px 12px; text-align: center; border: 1px dashed var(--line); border-radius: 10px; }
 .empty.large { padding: 70px 20px; }
-.modal-backdrop { position: fixed; inset: 0; z-index: 4; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,.45); }
-.editor-modal { width: min(680px, 94vw); max-height: 90vh; overflow: auto; padding: 22px; color: var(--text); background: var(--panel); border-radius: 14px; }
+.editor-modal { width: min(680px, 94vw); max-height: 90vh; max-height: 90dvh; margin: auto; overflow: auto; overscroll-behavior: contain; padding: 22px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+.editor-modal::backdrop { background: rgba(0,0,0,.55); }
+.editor-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.editor-error, .discard-warning { color: var(--danger); }
+.discard-warning { padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .extra-list:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 @media (max-width: 700px) {
   .kvasir-shell { padding: 0; }
-  .kvasir-panel { width: 100vw; height: 100vh; border: 0; border-radius: 0; }
+  .kvasir-panel { width: 100vw; height: 100vh; height: 100dvh; border: 0; border-radius: 0; }
   .topbar { padding: 14px 16px 12px; }
   .content { padding: 16px; }
   .library-grid, .settings-grid, .settings-grid.three, .pack-grid, .npc-list, .option-grid { grid-template-columns: 1fr; }
   .section-heading { align-items: flex-start; flex-direction: column; }
   .section-heading .primary, .section-heading .secondary { align-self: stretch; }
   .button-row button, .file-button { flex: 1 1 auto; text-align: center; }
+  .content.extra-content { padding: 10px; }
+  .extra-view, .extra-grid { gap: 8px; }
+  .extra-grid { grid-template-rows: minmax(0, 1fr) minmax(0, 2.5fr); }
+  .extra-grid:has(> .extra-list:only-child) { grid-template-rows: minmax(0, 1fr); }
+  .extra-detail { padding: 10px; }
+  .extra-detail .option-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 6px 0; }
+  .extra-detail .field { margin: 6px 0; }
 }
 </style>

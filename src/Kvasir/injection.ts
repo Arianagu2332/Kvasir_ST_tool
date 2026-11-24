@@ -5,9 +5,16 @@ export function clearKvasirInjections(): void {
   uninjectPrompts(Object.values(INJECTION_IDS));
 }
 
-export function refreshKvasirInjections(settings: KvasirSettings, activeStory: ActiveStory | null): void {
+export function currentChatKey(): string | null {
+  const chatId = SillyTavern.getCurrentChatId();
+  if (!chatId) return null;
+  const owner = SillyTavern.groupId ? ['group', SillyTavern.groupId] : ['character', SillyTavern.characterId];
+  return JSON.stringify([...owner, chatId]);
+}
+
+export function refreshKvasirInjections(settings: KvasirSettings, activeStory: ActiveStory | null, chatKey: string | null): void {
   clearKvasirInjections();
-  if (!activeStory) return;
+  if (!activeStory || !chatKey || currentChatKey() !== chatKey) return;
   const prompts: InjectionPrompt[] = [
     {
       id: INJECTION_IDS.story,
@@ -35,5 +42,5 @@ export function refreshKvasirInjections(settings: KvasirSettings, activeStory: A
       content: `【Kvasir｜NPC人设补充包】\n${activeStory.npcPack.trim()}`,
     });
   }
-  injectPrompts(prompts);
+  injectPrompts(prompts.map(prompt => ({ ...prompt, filter: () => currentChatKey() === chatKey })));
 }

@@ -1,4 +1,5 @@
-import { ActiveStory, ExtraEntry, KvasirSettings, StoryKind } from './types';
+import { ActiveStory, ExtraEntry, ExtraNsfw, KvasirSettings, StoryKind } from './types';
+import { packFormatInstruction, parseFinalPack } from './pack-format';
 
 export const INJECTION_IDS = {
   story: 'kvasir-storyline',
@@ -67,7 +68,8 @@ export async function generateCharacterPack(
     adaptationHints: string;
     selectedNpcEntries: NpcWorldbookEntry[];
   },
-): Promise<string> {
+): Promise<ReturnType<typeof parseFinalPack>> {
+  const withNpc = input.selectedNpcEntries.length > 0;
   const npcText = input.selectedNpcEntries.length
     ? ['【需要同时适配的NPC世界书条目】', ...input.selectedNpcEntries.map(entry => `【${entry.name}】\n${entry.content}`)].join('\n')
     : '本次不改写NPC。';
@@ -76,6 +78,7 @@ export async function generateCharacterPack(
     '本轮不是正文剧情，也不是角色扮演。Kvasir 的任务指令优先于预设中的普通写作指令。',
     '只输出相对于原始人设新增或改变的内容，不要复述原始角色卡，不要写剧情、事件、对话或长篇背景。',
     '输出必须精简、客观、可直接注入聊天上下文。不得替用户决定行动、情绪、表态或选择。',
+    packFormatInstruction(withNpc),
   ].join('\n');
   const userPrompt = [
     `请为“${input.title}”生成${input.kind === 'au' ? 'AU' : 'IF'}人设补充包。`,
@@ -87,21 +90,21 @@ export async function generateCharacterPack(
     npcText,
     '',
     '【输出格式】',
-    '先输出【{{char}}补充包】，使用最精简的条目说明，只写变化内容。',
-    input.selectedNpcEntries.length ? '随后按 NPC 名称分别输出【NPC补充包：角色名】，每个 NPC 只写必要的身份、性格或关系变化。' : '',
+    `遵守 Kvasir 的最终输出格式。${withNpc ? '每个 NPC 只写必要的身份、性格或关系变化。' : 'npc 字段留空。'}`,
   ].filter(Boolean).join('\n');
   const result = await generate({
     preset_name: settings.generationPreset || 'in_use',
     user_input: userPrompt,
     should_silence: true,
+    should_return_reasoning: true,
     max_chat_history: 0,
     custom_api: customApi(settings),
     injects: [{ position: 'in_chat', depth: 0, role: 'system', content: systemInstruction }],
   });
-  return typeof result === 'string' ? result.trim() : result.content.trim();
+  return parseFinalPack(typeof result === 'string' ? result : result.content, withNpc);
 }
 
-export function renderExtraRequest(entry: ExtraEntry, options: { nsfw: ExtraEntry['defaultNsfw']; minWords: number; styles: string[]; extra: string }): string {
+export function renderExtraRequest(entry: ExtraEntry, options: { nsfw: ExtraNsfw; minWords: number; styles: string[]; extra: string }): string {
   const styleText = options.styles.length ? `写作风格${options.styles.join('、')}` : '';
   return `<Request:请暂停当前剧情,停止角色扮演,专心为我创作一个番外小剧场.本轮允许代替{{user}}发言,允许突破字数上限.小剧场内容为:${entry.content}.要求符合{{char}}和{{user}}的人设不OOC,故事有头有尾,小剧场字数不少于${options.minWords}字,${options.nsfw === '禁止' ? '不得有NSFW情节' : options.nsfw === '必须' ? '必须包含NSFW情节' : '可以包含NSFW情节'},${styleText}.${options.extra ? `额外要求:${options.extra}.` : ''}>`;
 }

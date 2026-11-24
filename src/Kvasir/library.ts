@@ -1,5 +1,8 @@
 import bundledLibraryText from '../../library/library.json?raw';
-import { emptyLibrary, KvasirLibrary, KvasirSettings } from './types';
+import { emptyLibrary, ExtraGroup, KvasirLibrary, KvasirSettings } from './types';
+
+export const officialExtraGroup = 'official';
+export const localExtraGroup = 'local';
 
 const defaultManifestUrl = 'https://raw.githubusercontent.com/Arianagu2332/Kvasir_ST_tool/main/library/manifest.json';
 const defaultLibraryUrl = 'https://raw.githubusercontent.com/Arianagu2332/Kvasir_ST_tool/main/library/library.json';
@@ -16,6 +19,28 @@ function parseLibrary(input: unknown): KvasirLibrary {
     if: Array.isArray(data.if) ? data.if.filter(entry => entry && entry.type === 'if') : [],
     extra: Array.isArray(data.extra) ? data.extra.filter(entry => entry && entry.type === 'extra') : [],
   } as KvasirLibrary;
+}
+
+export function parseLocalLibrary(input: unknown): KvasirLibrary {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('无效的本地库');
+  const data = input as Partial<KvasirLibrary>;
+  const seen = new Set([officialExtraGroup, localExtraGroup]);
+  const extraGroups: ExtraGroup[] = [];
+  for (const group of Array.isArray(data.extraGroups) ? data.extraGroups : []) {
+    if (typeof group?.id !== 'string' || typeof group.title !== 'string' || !group.title.trim() || seen.has(group.id)) continue;
+    seen.add(group.id);
+    extraGroups.push({ id: group.id, title: group.title.trim() });
+  }
+  const library = parseLibrary(data);
+  return {
+    ...library,
+    extraGroups,
+    extra: library.extra.filter(entry => typeof entry.id === 'string' && typeof entry.title === 'string' && typeof entry.content === 'string')
+      .map(({ id, type, title, summary, content, groupId }) => ({
+        id, type, title, summary: typeof summary === 'string' ? summary : '', content,
+        groupId: groupId && groupId !== officialExtraGroup && seen.has(groupId) ? groupId : localExtraGroup,
+      })),
+  };
 }
 
 function mergeLibraries(...libraries: Array<KvasirLibrary | null | undefined>): KvasirLibrary {
@@ -41,7 +66,11 @@ export function bundledLibrary(): KvasirLibrary {
 }
 
 export function effectiveLibrary(settings: KvasirSettings): KvasirLibrary {
-  return mergeLibraries(bundledLibrary(), settings.remoteLibrary, settings.customLibrary);
+  return mergeLibraries(officialLibrary(settings), settings.customLibrary);
+}
+
+export function officialLibrary(settings: KvasirSettings): KvasirLibrary {
+  return mergeLibraries(bundledLibrary(), settings.remoteLibrary);
 }
 
 export async function refreshRemoteLibrary(settings: KvasirSettings): Promise<{ library: KvasirLibrary; changed: boolean }> {
